@@ -16,25 +16,26 @@ import os
 
 @click.command()
 @click.option('--seed', default=42)
-@click.option('--buffer-size', default=30000, help='Replay buffer capacity')
+@click.option('--buffer-size', default=100000, help='Replay buffer capacity')
 @click.option('--device', default='cuda' if torch.cuda.is_available() else 'cpu', help='Device to train on')
 @click.option('--feature-dim', default=512, help='Dimension of CNN feature extractor output')
-@click.option('--hidden-size', default=128, help='Hidden layer size in Q-network')
+@click.option('--hidden-size', default=256, help='Hidden layer size in Q-network')
 @click.option('--learning-rate', default=2.5e-4, help='Learning rate for optimizer')
 @click.option('--horizon', default=4, help='Number of stacked frames')
 @click.option('--batch-size', default=64, help='Batch size for training')
 @click.option('--train-interval', default=4, help='Train the agent every N steps')
-@click.option('--num-episodes', default=10000, help='Number of training episodes')
-@click.option('--save-interval', default=100, help='Logging and checkpoint interval (in episodes)')
+@click.option('--num-episodes', default=1000, help='Number of training episodes')
+@click.option('--save-interval', default=10, help='Logging and checkpoint interval (in episodes)')
 @click.option('--gamma', default=0.99)
-@click.option('--tau', default=1e-4)
+@click.option('--tau', default=1e-3)
 @click.option('--max-steps', default=10000)
 @click.option('--train-initial-step', default=10000)
-@click.option('--eps-decay-rate', default=0.9995)
+@click.option('--eps-decay-rate', default=0.9975)
 @click.option('--eps-minimum', default=0.01)
+@click.option('--debug', default=False)
 def train(seed, buffer_size, device, feature_dim, hidden_size, learning_rate,
           horizon, batch_size, train_interval, num_episodes, save_interval, 
-          gamma, tau, max_steps, train_initial_step, eps_decay_rate, eps_minimum):
+          gamma, tau, max_steps, train_initial_step, eps_decay_rate, eps_minimum, debug):
     
     torch.manual_seed(seed)
     random.seed(seed)
@@ -45,17 +46,23 @@ def train(seed, buffer_size, device, feature_dim, hidden_size, learning_rate,
     ckpt_dir = f"./output/{run_name}/checkpoints/"
     os.makedirs(ckpt_dir, exist_ok=True)
 
-    wandb_run = wandb.init(
-        dir=f'./output/{run_name}',
-        project='drl_hw3',
-        mode="online",
-        name=run_name,
-    )
-    wandb.config.update(
-        {
-            "output_dir": f'./output/{run_name}',
-        }
-    )
+    if debug:
+        train_initial_step = 0
+        buffer_size = 1000
+        num_episodes = 100
+
+    if not debug:
+        wandb_run = wandb.init(
+            dir=f'./output/{run_name}',
+            project='drl_hw3',
+            mode="online",
+            name=run_name,
+        )
+        wandb.config.update(
+            {
+                "output_dir": f'./output/{run_name}',
+            }
+        )
 
     env = gym_super_mario_bros.make('SuperMarioBros-v0')
     env = JoypadSpace(env, COMPLEX_MOVEMENT)
@@ -112,32 +119,33 @@ def train(seed, buffer_size, device, feature_dim, hidden_size, learning_rate,
                 steps += 1
                 episode_step += 1
 
-                wandb_run.log({
-                    'steps': steps,
-                }, step=steps)
+                if not debug:
+                    wandb_run.log({
+                        'steps': steps,
+                    }, step=steps)
 
                 if steps % train_interval == 0 and len(replay_buffer) >= batch_size and steps > train_initial_step:
                     batch = replay_buffer.sample(batch_size)
                     loss = agent.train(batch)
-                    wandb_run.log({
-                        'loss': loss,
-                        'lr': learning_rate,
-                    }, step=steps)
+                    if not debug:
+                        wandb_run.log({
+                            'loss': loss,
+                            'lr': learning_rate,
+                        }, step=steps)
 
                 if max_steps and episode_step >= max_steps:
                     break
 
             reward_history.append(total_reward)
-            replay_buffer.multistep_wrapper.reset()
-            replay_buffer.multistep_wrapper_next.reset()
             agent.multistep_wrapper.reset()
 
-            wandb_run.log({
-                'total_reward': total_reward,
-                'episode': episode,
-                'epsilon': epsilon,
-                'episode_length': episode_step
-            }, step=steps)
+            if not debug:
+                wandb_run.log({
+                    'total_reward': total_reward,
+                    'episode': episode,
+                    'epsilon': epsilon,
+                    'episode_length': episode_step
+                }, step=steps)
 
             mean_span = min(100, episode)
             avg_return = np.mean(reward_history[-mean_span:])
