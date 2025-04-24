@@ -14,7 +14,7 @@ class ConvNet(nn.Module):
         )
         self.fc = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(64 * 26 * 28, feature_dim),  
+            nn.Linear(64 * 7 * 7, feature_dim),  
             nn.ReLU()
         )
 
