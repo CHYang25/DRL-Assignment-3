@@ -1,10 +1,11 @@
 from .base_dqn import Base_DQN_Agent
 from .model import QNet
-from .utils import Multistep_Wrapper, preprocess_frame
+from .utils import Multistep_Wrapper, SkipFrame_Wrapper, preprocess_frame
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim import AdamW
+import random
 
 class Double_DQN_Agent(Base_DQN_Agent):
 
@@ -17,6 +18,7 @@ class Double_DQN_Agent(Base_DQN_Agent):
             obs_shape,
             lr,
             device,
+            skip,
             gamma=0.99,
             tau=1e-3):
         
@@ -24,20 +26,32 @@ class Double_DQN_Agent(Base_DQN_Agent):
         self.model = QNet(in_channels, feature_dim, n_actions, n_hidden).to(device)
         self.model_target = QNet(in_channels, feature_dim, n_actions, n_hidden).to(device)
         self.multistep_wrapper = Multistep_Wrapper(horizon, obs_shape)
+        self.skip_frame_wrapper = SkipFrame_Wrapper(skip)
         self.optimizer = AdamW(self.model.parameters(), lr=lr)
         self.loss_fn = nn.SmoothL1Loss()
         self.device = device
         self.gamma = gamma
         self.tau = tau
         self.n_actions = n_actions
+        self.multistep_wrapper.reset()
+        self.skip_frame_wrapper.reset()
+        self.action_list = list(range(n_actions))
 
-    def act(self, observation):
-        with torch.no_grad():
-            observation = self.multistep_wrapper.stack(preprocess_frame(observation)).to(self.device)
-            out = self.model(observation.unsqueeze(dim=0)).squeeze(dim=0)
-        return torch.argmax(out).cpu().item()
+    def act(self, observation, epsilon=0.0):
+        if self.skip_frame_wrapper.can_set_action():
+            if epsilon < random.uniform(0, 1):
+                with torch.no_grad():
+                    observation = self.multistep_wrapper.stack(preprocess_frame(observation)).to(self.device)
+                    out = self.model(observation.unsqueeze(dim=0)).squeeze(dim=0)
+                    action = torch.argmax(out).cpu().item()
+            else:
+                action = random.choice(self.action_list)
 
-    def train(self, batch):
+            self.skip_frame_wrapper.set_action(action)
+
+        return self.skip_frame_wrapper.action
+
+    def train(self, batch, update_target = None):
         obs_batch = batch['obs'].to(self.device)
         action_batch = batch['action'].to(self.device)
         reward_batch = batch['reward'].to(self.device)
@@ -61,10 +75,13 @@ class Double_DQN_Agent(Base_DQN_Agent):
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=5.0)
         self.optimizer.step()
 
-        q_target_network_state_dict = self.model_target.state_dict()
-        q_network_state_dict = self.model.state_dict()
-        for key in q_network_state_dict:
-            q_target_network_state_dict[key] = q_network_state_dict[key]*self.tau + q_target_network_state_dict[key]*(1-self.tau)
+        if update_target is not None and update_target:
+            self.model_target.load_state_dict(self.model.state_dict())
+        else:
+            q_target_network_state_dict = self.model_target.state_dict()
+            q_network_state_dict = self.model.state_dict()
+            for key in q_network_state_dict:
+                q_target_network_state_dict[key] = q_network_state_dict[key]*self.tau + q_target_network_state_dict[key]*(1-self.tau)
 
-        self.model_target.load_state_dict(q_target_network_state_dict)
+            self.model_target.load_state_dict(q_target_network_state_dict)
         return loss.cpu().detach().item()

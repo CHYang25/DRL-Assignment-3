@@ -19,12 +19,15 @@ class Agent(Double_DQN_Agent):
             horizon=4,
             obs_shape=env.observation_space.shape[:-1],
             lr=0,
-            device='cuda',
+            device='cpu',
+            skip=4,
             gamma=0.99,
             tau=1e-3
         )
         self.action_space = gym.spaces.Discrete(12)
-        self.model.load_state_dict(torch.load("output/2025.04.21-00.19.55/checkpoints/ckpt_3400.pt", "rb"))
+        self.model.load_state_dict(torch.load("output/2025.05.04-23.37.05/checkpoints/ckpt_2400.pt", "rb"))
+        self.multistep_wrapper.reset()
+        self.skip_frame_wrapper.reset()
 
     def act(self, observation):
         return super().act(observation)

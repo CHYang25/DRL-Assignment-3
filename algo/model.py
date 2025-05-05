@@ -28,11 +28,7 @@ class QNet(nn.Module):
         super(QNet, self).__init__()
         self.ft_extractor = ConvNet(in_channels, feature_dim)
         self.fc = nn.Sequential(
-            nn.Linear(feature_dim, n_hidden),
-            nn.ReLU(),
-            nn.Linear(n_hidden, n_hidden),
-            nn.ReLU(),
-            nn.Linear(n_hidden, n_actions)
+            nn.Linear(feature_dim, n_actions)
         )
 
     def forward(self, x):

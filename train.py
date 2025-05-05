@@ -4,7 +4,7 @@ from nes_py.wrappers import JoypadSpace
 import imageio
 import click
 from algo import Double_DQN_Agent
-from algo.utils import ReplayBuffer
+from algo.utils import ReplayBuffer, RewardShaper
 import torch
 import math
 import wandb
@@ -16,26 +16,29 @@ import os
 
 @click.command()
 @click.option('--seed', default=42)
-@click.option('--buffer-size', default=100000, help='Replay buffer capacity')
+@click.option('--buffer-size', default=1000000, help='Replay buffer capacity')
 @click.option('--device', default='cuda' if torch.cuda.is_available() else 'cpu', help='Device to train on')
 @click.option('--feature-dim', default=512, help='Dimension of CNN feature extractor output')
 @click.option('--hidden-size', default=256, help='Hidden layer size in Q-network')
 @click.option('--learning-rate', default=2.5e-4, help='Learning rate for optimizer')
 @click.option('--horizon', default=4, help='Number of stacked frames')
-@click.option('--batch-size', default=64, help='Batch size for training')
-@click.option('--train-interval', default=4, help='Train the agent every N steps')
+@click.option('--batch-size', default=16, help='Batch size for training')
+@click.option('--train-interval', default=8192, help='Train the agent every N steps')
 @click.option('--num-episodes', default=1000, help='Number of training episodes')
-@click.option('--save-interval', default=10, help='Logging and checkpoint interval (in episodes)')
+@click.option('--save-interval', default=100, help='Logging and checkpoint interval (in episodes)')
+@click.option('--skip', default=4)
 @click.option('--gamma', default=0.99)
+@click.option('--update-target-interval', default=None)
 @click.option('--tau', default=1e-3)
-@click.option('--max-steps', default=10000)
+@click.option('--max-steps', default=None)
 @click.option('--train-initial-step', default=10000)
 @click.option('--eps-decay-rate', default=0.9975)
-@click.option('--eps-minimum', default=0.01)
+@click.option('--eps-minimum', default=0.1)
 @click.option('--debug', default=False)
+@click.option('--norm-img-obs', default=False)
 def train(seed, buffer_size, device, feature_dim, hidden_size, learning_rate,
-          horizon, batch_size, train_interval, num_episodes, save_interval, 
-          gamma, tau, max_steps, train_initial_step, eps_decay_rate, eps_minimum, debug):
+          horizon, batch_size, train_interval, num_episodes, save_interval, skip,
+          gamma, update_target_interval, tau, max_steps, train_initial_step, eps_decay_rate, eps_minimum, debug, norm_img_obs):
     
     torch.manual_seed(seed)
     random.seed(seed)
@@ -64,12 +67,14 @@ def train(seed, buffer_size, device, feature_dim, hidden_size, learning_rate,
             }
         )
 
+    if update_target_interval:
+        update_target_interval *= train_interval
+
     env = gym_super_mario_bros.make('SuperMarioBros-v0')
     env = JoypadSpace(env, COMPLEX_MOVEMENT)
 
     obs_space = env.observation_space.shape[:-1]
     action_space = env.action_space.n
-    action_list = list(range(action_space))
 
     replay_buffer = ReplayBuffer(
         horizon=horizon,
@@ -88,9 +93,12 @@ def train(seed, buffer_size, device, feature_dim, hidden_size, learning_rate,
         obs_shape=obs_space,
         lr=learning_rate,
         device=device,
+        skip=skip,
         gamma=gamma,
         tau=tau
     )
+
+    reward_shaper = RewardShaper()
 
     steps = 0
     reward_history = []
@@ -106,14 +114,14 @@ def train(seed, buffer_size, device, feature_dim, hidden_size, learning_rate,
             episode_step = 0
             while not done:
 
-                if epsilon < random.uniform(0, 1):
-                    action = agent.act(obs)
-                else:
-                    action = random.choice(action_list)
+                action = agent.act(obs, epsilon=epsilon)
 
-                next_obs, reward, done, _ = env.step(action)
+                next_obs, reward, done, info = env.step(action)
                 total_reward += reward
-                replay_buffer.add(obs, action, reward, next_obs, done)
+
+                if episode_step % skip == 0:
+                    replay_buffer.add(obs, action, reward + reward_shaper.compute_reward(info), next_obs, done)
+
                 obs = next_obs.copy()
 
                 steps += 1
@@ -125,8 +133,12 @@ def train(seed, buffer_size, device, feature_dim, hidden_size, learning_rate,
                     }, step=steps)
 
                 if steps % train_interval == 0 and len(replay_buffer) >= batch_size and steps > train_initial_step:
-                    batch = replay_buffer.sample(batch_size)
-                    loss = agent.train(batch)
+                    batch = replay_buffer.sample(batch_size, norm_img_obs)
+                    if update_target_interval:
+                        loss = agent.train(batch, update_target=(steps % update_target_interval == 0))
+                    else:
+                        loss = agent.train(batch)
+
                     if not debug:
                         wandb_run.log({
                             'loss': loss,
@@ -138,6 +150,8 @@ def train(seed, buffer_size, device, feature_dim, hidden_size, learning_rate,
 
             reward_history.append(total_reward)
             agent.multistep_wrapper.reset()
+            agent.skip_frame_wrapper.reset()
+            reward_shaper.reset()
 
             if not debug:
                 wandb_run.log({
@@ -153,11 +167,13 @@ def train(seed, buffer_size, device, feature_dim, hidden_size, learning_rate,
             tepisode.set_description(f"Training episode {episode}")
             epsilon = max(epsilon*eps_decay_rate, eps_minimum)
 
-            if (episode+1) % save_interval == 0 and avg_return > best_return:
+            if (episode+1) % save_interval == 0:
                 # Save the checkpoint
                 with open(os.path.join(ckpt_dir, f"ckpt_{episode+1}.pt"), "+wb") as f:
                     torch.save(agent.model.state_dict(), f)
                 best_return = avg_return
 
+    with open(os.path.join(ckpt_dir, f"final_ckpt.pt"), "+wb") as f:
+        torch.save(agent.model.state_dict(), f)
 if __name__ == "__main__":
     train()

@@ -77,7 +77,7 @@ class ReplayBuffer:
         return obs, next_obs
             
 
-    def sample(self, batch_size):
+    def sample(self, batch_size, norm_img_obs=True):
         idxs = np.random.randint(0, self.size, size=batch_size)
         obss = []
         next_obss = []
@@ -88,14 +88,18 @@ class ReplayBuffer:
             obss.append(obs)
             next_obss.append(next_obs)
         
-        obss = torch.stack(obss, dim=0)
-        next_obss = torch.stack(next_obss, dim=0)
+        obss = torch.stack(obss, dim=0).to(torch.float32)
+        next_obss = torch.stack(next_obss, dim=0).to(torch.float32)
+
+        if norm_img_obs:
+            obss /= 255.0
+            next_obss /= 255.0
 
         batch = {
-            'obs': obss.to(torch.float32) / 255.0,
+            'obs': obss,
             'action': self.action[idxs],
             'reward': self.reward[idxs],
-            'next_obs': next_obss.to(torch.float32) / 255.0,
+            'next_obs': next_obss,
             'done': self.done[idxs], 
         }
         return batch
@@ -128,6 +132,25 @@ class Multistep_Wrapper:
     def reset(self):
         self.cnt = 0
 
+class SkipFrame_Wrapper:
+    def __init__(self, skip):
+        """Return only every `skip`-th frame"""
+        self.cnt = 0
+        self._skip = skip
+        self.action = None
+
+    def can_set_action(self):
+        res = (self.cnt % self._skip == 0)
+        self.cnt += 1
+        return res
+    
+    def set_action(self, action):
+        self.action = action
+
+    def reset(self):
+        self.cnt = 0
+
+from torchvision import transforms as T
 def preprocess_frame(frame):
     # Convert to grayscale
     gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
@@ -135,3 +158,45 @@ def preprocess_frame(frame):
     resized = cv2.resize(gray, (FRAME_RESIZE, FRAME_RESIZE), interpolation=cv2.INTER_AREA)
     # Normalize to [0, 1] and convert to float32
     return resized.astype(np.uint8)
+
+class RewardShaper:
+    def __init__(self):
+        self.prev_info = None
+
+    def reset(self):
+        self.prev_info = None
+
+    def compute_reward(self, info):
+        if self.prev_info is None:
+            self.prev_info = info
+            return 0.0
+
+        reward = 0.0
+
+        # 2. Coin collection
+        dcoins = info["coins"] - self.prev_info["coins"]
+        reward += 1.0 * dcoins
+
+        # 3. Score increase
+        dscore = info["score"] - self.prev_info["score"]
+        reward += 0.01 * dscore  # scaled down to prevent high variance
+
+        # 5. Status improvement
+        status_values = {"small": 0, "tall": 1, "fireball": 2}
+        dstatus = status_values[info["status"]] - status_values[self.prev_info["status"]]
+        reward += 2.0 * dstatus
+
+        # 6. Reached the flag
+        if info["flag_get"] and not self.prev_info["flag_get"]:
+            reward += 50.0
+
+        # 8. Stage/world progression reward
+        world_stage_prev = self.prev_info["world"] * 10 + self.prev_info["stage"]
+        world_stage_curr = info["world"] * 10 + info["stage"]
+        dstage = world_stage_curr - world_stage_prev
+        if dstage > 0:
+            reward += 30.0 * dstage
+
+        # 7. Life lost penalty
+        self.prev_info = info
+        return reward

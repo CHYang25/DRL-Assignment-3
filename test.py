@@ -1,6 +1,7 @@
 import gym_super_mario_bros
 from gym_super_mario_bros.actions import COMPLEX_MOVEMENT
 from nes_py.wrappers import JoypadSpace
+from algo.utils import preprocess_frame
 from algo import Double_DQN_Agent
 import os
 import torch
@@ -10,11 +11,12 @@ from PIL import Image
 @click.command()
 @click.option('--device', default='cuda' if torch.cuda.is_available() else 'cpu', help='Device to train on')
 @click.option('--feature-dim', default=512, help='Dimension of CNN feature extractor output')
-@click.option('--hidden-size', default=128, help='Hidden layer size in Q-network')
+@click.option('--hidden-size', default=256, help='Hidden layer size in Q-network')
 @click.option('--horizon', default=4, help='Number of stacked frames')
 @click.option('--gamma', default=0.99)
 @click.option('--checkpoint', required=True)
-def eval(device, feature_dim, hidden_size, horizon, gamma, checkpoint):
+@click.option('--skip', default=4)
+def eval(device, feature_dim, hidden_size, horizon, gamma, checkpoint, skip):
     env = gym_super_mario_bros.make('SuperMarioBros-v0')
     frames = []
     env = JoypadSpace(env, COMPLEX_MOVEMENT)
@@ -32,6 +34,7 @@ def eval(device, feature_dim, hidden_size, horizon, gamma, checkpoint):
         obs_shape=obs_space,
         lr=0.0,
         device=device,
+        skip=skip,
         gamma=gamma,
         tau=None
     )
@@ -44,10 +47,10 @@ def eval(device, feature_dim, hidden_size, horizon, gamma, checkpoint):
     done = False
     step = 0
     while not done:
-        action = agent.act(obs)
+        action = agent.act(obs, epsilon=1)
         obs, reward, done, _ = env.step(action)
         total_reward += reward
-        frames.append(Image.fromarray(env.render(mode='rgb_array')))
+        frames.append(Image.fromarray((env.render(mode='rgb_array'))))
         step += 1
 
     print("Total reward:", total_reward)
