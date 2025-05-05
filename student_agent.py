@@ -25,7 +25,7 @@ class Agent(Double_DQN_Agent):
             tau=1e-3
         )
         self.action_space = gym.spaces.Discrete(12)
-        self.model.load_state_dict(torch.load("output/2025.05.04-23.37.05/checkpoints/ckpt_2400.pt"))
+        self.model.load_state_dict(torch.load("output/2025.05.04-23.37.05/checkpoints/ckpt_2400.pt", map_location=torch.device('cpu')))
         self.multistep_wrapper.reset()
         self.skip_frame_wrapper.reset()
 
