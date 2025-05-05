@@ -36,7 +36,7 @@ import os
 @click.option('--eps-minimum', default=0.1)
 @click.option('--debug', default=False)
 @click.option('--norm-img-obs', default=False)
-def train(seed, buffer_size, device, feature_dim, hidden_size, learning_rate,
+def train(seed, buffer_size, device, feature_dim, hidden_size, learning_rate, 
           horizon, batch_size, train_interval, num_episodes, save_interval, skip,
           gamma, update_target_interval, tau, max_steps, train_initial_step, eps_decay_rate, eps_minimum, debug, norm_img_obs):
     
